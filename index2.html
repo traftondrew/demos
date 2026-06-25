@@ -81,6 +81,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .hl-gram{background:var(--adim);border-bottom:2px solid var(--amber);border-radius:2px;cursor:pointer}
 .hl-bill{background:var(--pdim);border-bottom:2px solid var(--purple);border-radius:2px;cursor:pointer}
 
+/* autocorrect spelling fix — shows only the green corrected word */
+.hl-auto{cursor:pointer;display:inline}
+.hl-auto-orig{display:none}
+.hl-auto-new{color:var(--green);font-weight:600;background:var(--gdim);border-radius:2px;padding:0 2px;border-bottom:2px solid var(--green)}
+
 /* inline suggestion ghost for non-autocorrect items */
 .hl-sugg{display:inline;margin-left:4px;padding:1px 5px;background:var(--gdim);border:1px solid var(--gbrd);border-radius:3px;color:var(--green);font-size:.88em;font-weight:500;cursor:pointer;white-space:nowrap;animation:suggin .22s ease-out}
 @keyframes suggin{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:translateY(0)}}
@@ -114,6 +119,23 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .disc-section-sugg{font-size:11px;color:var(--green);margin-bottom:5px}
 .disc-section-btn{background:var(--bdim);border:1px solid var(--bbrd);border-radius:var(--r);color:var(--blue);cursor:pointer;padding:3px 8px;font-size:11px;font-family:var(--font);font-weight:500;transition:all .12s}
 .disc-section-btn:hover{background:rgba(74,158,255,.22)}
+
+/* resolved issues section */
+.resolved-section{border-top:1px solid var(--border);flex-shrink:0;max-height:40%;overflow-y:auto}
+.resolved-hdr{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none}
+.resolved-hdr:hover{background:var(--bg3)}
+.resolved-hdr-label{font-size:11px;color:var(--text3);font-weight:500;display:flex;align-items:center;gap:5px}
+.resolved-hdr-count{background:var(--bg4);border-radius:10px;padding:1px 6px;font-size:10px;color:var(--text3);min-width:16px;text-align:center}
+.resolved-body{padding:0 0 4px}
+.resolved-card{margin:3px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:8px 10px;opacity:.65;transition:opacity .15s}
+.resolved-card:hover{opacity:.9}
+.resolved-card .ihead{margin-bottom:4px}
+.resolved-card .ibody{font-size:11px;margin-bottom:4px}
+.resolved-card .ireason{display:none}
+.resolved-action-label{font-size:10px;color:var(--green);display:flex;align-items:center;gap:4px;margin-bottom:4px}
+.resolved-action-label i{font-size:11px}
+.btn-undo{background:none;border:1px dashed var(--border2);border-radius:var(--r);color:var(--text3);cursor:pointer;padding:2px 8px;font-size:10px;font-family:var(--font);transition:all .12s;display:flex;align-items:center;gap:3px}
+.btn-undo:hover{border-color:var(--amber);color:var(--amber);background:var(--adim)}
 
 /* vocabulary tray — shown in QA panel when words have been added */
 .vocab-tray{margin:8px 10px 4px;background:var(--bg4);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden}
@@ -285,6 +307,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
         <i class="ti ti-shield-check" aria-hidden="true"></i>
         <span>Issues appear as you dictate</span>
       </div>
+    </div>
+    <div class="resolved-section" id="resolvedSection" style="display:none">
+      <div class="resolved-hdr" onclick="toggleResolved()">
+        <span class="resolved-hdr-label"><i class="ti ti-circle-check" aria-hidden="true"></i>Resolved <span class="resolved-hdr-count" id="resolvedCount">0</span></span>
+        <i class="ti ti-chevron-down" id="resolvedChevron" style="font-size:11px;color:var(--text3)"></i>
+      </div>
+      <div class="resolved-body" id="resolvedBody"></div>
     </div>
     <div class="qa-foot">
       <button class="bdall" onclick="dismissAll()">Dismiss All</button>
@@ -674,6 +703,8 @@ let vocabulary=new Set();
 let freeEdit=false;
 // editorText: plain-text mirror of editor content in free-edit mode
 let editorText='';
+// resolvedIssues: issues that have been addressed, with undo capability
+let resolvedIssues=[];
 
 /* ═══════════════════════════════════════════════════════════════════════════
    INIT
@@ -752,8 +783,8 @@ function rebuildFreeEditor(){
       // Walk all text nodes before the caret to sum up character count
       const walker=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT,{
         acceptNode(node){
-          // Skip ghost suggestion pills — they're not real text
           if(node.parentElement?.closest('.hl-sugg')) return NodeFilter.FILTER_REJECT;
+          if(node.parentElement?.classList.contains('hl-auto-orig')) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       });
@@ -780,6 +811,7 @@ function rebuildFreeEditor(){
       const walker=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT,{
         acceptNode(node){
           if(node.parentElement?.closest('.hl-sugg')) return NodeFilter.FILTER_REJECT;
+          if(node.parentElement?.classList.contains('hl-auto-orig')) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       });
@@ -834,14 +866,15 @@ function applyHighlights(escapedText, slotHint){
         }
       }
     } else if(isAuto && issue.suggested_text){
-      // Autocorrect: just underline the original text in orange — suggestion shown in sidebar + hover only
+      // Spelling autocorrect: replace the misspelling with green corrected word in the report
       const escapedOrig=esc(issue.original_text).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       html=html.replace(new RegExp(`(${escapedOrig})`,'i'),
-        `<span class="hl-gram" data-id="${issue.id}">$1</span>`);
+        `<span class="hl-auto" data-id="${issue.id}"><span class="hl-auto-orig">${esc(issue.original_text)}</span><span class="hl-auto-new">${esc(issue.suggested_text)}</span></span>`);
     } else {
       const escapedOrig=esc(issue.original_text).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       const cls=issue.category==='Discrepancy'?'hl-disc':issue.category==='Reimbursement'?'hl-bill':'hl-gram';
-      const ghost=issue.suggested_text
+      // Only show inline suggestion ghost for discrepancies — grammar suggestions show in sidebar + hover only
+      const ghost=(issue.suggested_text && issue.category!=='Grammar')
         ? `<span class="hl-sugg" data-id="${issue.id}">&rarr; ${esc(issue.suggested_text)}</span>`
         : '';
       html=html.replace(new RegExp(`(${escapedOrig})`,'i'),
@@ -1050,11 +1083,11 @@ function mkCard(issue,isNew){
       <span style="margin:0 4px;color:var(--text3)">→</span><span class="inew">${esc(issue.suggested_text)}</span>
     </div>`;
     acts=`<div class="iacts">
-      <button class="bdis" onclick="dis('${issue.id}',event)">Dismiss</button>
-      <button class="bacc" onclick="acc('${issue.id}',event)">Accept</button>
+      <div class="autoapplied"><i class="ti ti-circle-check" style="font-size:13px" aria-hidden="true"></i> Auto-corrected</div>
+      <button class="bdis" style="margin-left:auto" onclick="revertAuto('${issue.id}',event)">Revert</button>
     </div>
     ${issue.category==='Grammar'
-      ? `<div style="margin-top:6px"><button class="hl-popover-vocab" onclick="addToVocab('${issue.id}')"><i class="ti ti-book-2" style="font-size:10px"></i> Add to vocabulary</button></div>`
+      ? `<div style="margin-top:6px"><button class="hl-popover-vocab" onclick="addToVocab('${issue.id}')"><i class="ti ti-book-2" style="font-size:10px"></i> Revert &amp; add to vocabulary</button></div>`
       : ''}`;
 
   } else if(issue.issue_type==='Alert'){
@@ -1082,31 +1115,27 @@ function mkCard(issue,isNew){
 function dis(id,e){
   e?.stopPropagation();
   removePopover();
-  issues=issues.filter(i=>i.id!==id);
-  document.getElementById('card-'+id)?.remove();
-  bump(issues.length,false);
+  const iss=issues.find(i=>i.id===id);
+  if(!iss) return;
+  resolveIssue(iss, 'Dismissed');
   renderSkeleton(dictating);
-  if(!issues.length) emptyState('All issues dismissed','ti-shield-check','var(--text3)');
 }
 
 function acc(id,e){
   e?.stopPropagation();
   removePopover();
   const iss=issues.find(i=>i.id===id);
-  if(iss?.original_text&&iss?.suggested_text){
+  if(!iss) return;
+  if(iss.original_text&&iss.suggested_text){
     const re=new RegExp(iss.original_text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');
-    // Apply to slotContent (dictation mode) and editorText (free-edit mode)
     Object.keys(slotContent).forEach(token=>{
       slotContent[token]=slotContent[token].replace(re, iss.suggested_text);
     });
     if(freeEdit) editorText=editorText.replace(re, iss.suggested_text);
   }
-  issues=issues.filter(i=>i.id!==id);
-  document.getElementById('card-'+id)?.remove();
-  bump(issues.length,false);
+  resolveIssue(iss, 'Accepted');
   renderSkeleton(dictating);
   notify('Correction applied');
-  if(!issues.length) emptyState('All issues resolved','ti-circle-check','var(--green)');
 }
 
 /* Fix Findings to match Impression — replace findings_text with impression_text */
@@ -1114,19 +1143,17 @@ function accFindings(id,e){
   e?.stopPropagation();
   removePopover();
   const iss=issues.find(i=>i.id===id);
-  if(iss?.findings_text&&iss?.impression_text){
+  if(!iss) return;
+  if(iss.findings_text&&iss.impression_text){
     const re=new RegExp(iss.findings_text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');
     Object.keys(slotContent).forEach(token=>{
       slotContent[token]=slotContent[token].replace(re, iss.impression_text);
     });
     if(freeEdit) editorText=editorText.replace(re, iss.impression_text);
   }
-  issues=issues.filter(i=>i.id!==id);
-  document.getElementById('card-'+id)?.remove();
-  bump(issues.length,false);
+  resolveIssue(iss, 'Fixed Findings');
   renderSkeleton(dictating);
   notify('Findings updated');
-  if(!issues.length) emptyState('All issues resolved','ti-circle-check','var(--green)');
 }
 
 /* Fix Impression to match Findings — replace impression_text with findings_text */
@@ -1134,38 +1161,34 @@ function accImpression(id,e){
   e?.stopPropagation();
   removePopover();
   const iss=issues.find(i=>i.id===id);
-  if(iss?.findings_text&&iss?.impression_text){
+  if(!iss) return;
+  if(iss.findings_text&&iss.impression_text){
     const re=new RegExp(iss.impression_text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');
     Object.keys(slotContent).forEach(token=>{
       slotContent[token]=slotContent[token].replace(re, iss.findings_text);
     });
     if(freeEdit) editorText=editorText.replace(re, iss.findings_text);
   }
-  issues=issues.filter(i=>i.id!==id);
-  document.getElementById('card-'+id)?.remove();
-  bump(issues.length,false);
+  resolveIssue(iss, 'Fixed Impression');
   renderSkeleton(dictating);
   notify('Impression updated');
-  if(!issues.length) emptyState('All issues resolved','ti-circle-check','var(--green)');
 }
 
 function dismissAll(){
-  issues=[]; bump(0,false);
+  [...issues].forEach(iss => resolveIssue(iss, 'Dismissed'));
   renderSkeleton(dictating);
-  emptyState('All issues dismissed','ti-shield-check','var(--text3)');
 }
 
 function acceptAll(){
-  issues.forEach(iss=>{
+  [...issues].forEach(iss=>{
     if(iss.original_text&&iss.suggested_text){
       const re=new RegExp(iss.original_text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');
       Object.keys(slotContent).forEach(token=>{ slotContent[token]=slotContent[token].replace(re,iss.suggested_text); });
       if(freeEdit) editorText=editorText.replace(re,iss.suggested_text);
     }
+    resolveIssue(iss, 'Accepted');
   });
-  issues=[]; bump(0,false);
   renderSkeleton(dictating);
-  emptyState('All corrections applied','ti-circle-check','var(--green)');
   notify('All corrections applied');
 }
 
@@ -1213,6 +1236,10 @@ function showPopover(id, anchorEl){
     actsHtml=`<div class="hl-popover-acts">
       <button class="hl-popover-dis" onclick="disFromPop('${id}')">Ignore</button>
     </div>`;
+  } else if(hasSugg && isAuto){
+    actsHtml=`<div class="hl-popover-acts">
+      <button class="hl-popover-dis" onclick="revertAutoFromPop('${id}')">Revert to "${esc(issue.original_text)}"</button>
+    </div>`;
   } else if(hasSugg){
     actsHtml=`<div style="font-size:12px;color:var(--green);margin-bottom:6px;font-weight:500">→ ${esc(issue.suggested_text)}</div>
     <div class="hl-popover-acts">
@@ -1230,7 +1257,7 @@ function showPopover(id, anchorEl){
     ${actsHtml}
     ${isAutoGram
       ? `<button class="hl-popover-vocab" onclick="addToVocabFromPop('${id}')">
-           <i class="ti ti-book-2" style="font-size:11px"></i> Add "${esc(issue.original_text)}" to vocabulary
+           <i class="ti ti-book-2" style="font-size:11px"></i> Revert &amp; add "${esc(issue.original_text)}" to vocabulary
          </button>`
       : ''}`;
 
@@ -1259,20 +1286,139 @@ function disFromPop(id){ removePopover(); dis(id,null); }
 function addToVocabFromPop(id){ removePopover(); addToVocab(id); }
 function accFindingsFromPop(id){ removePopover(); accFindings(id,null); }
 function accImpressionFromPop(id){ removePopover(); accImpression(id,null); }
+function revertAutoFromPop(id){ removePopover(); revertAuto(id,null); }
+
+/* Revert an autocorrect — put the original misspelling back in the report */
+function revertAuto(id,e){
+  e?.stopPropagation();
+  removePopover();
+  const iss=issues.find(i=>i.id===id);
+  if(!iss) return;
+  if(iss.original_text&&iss.suggested_text){
+    const re=new RegExp(iss.suggested_text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');
+    Object.keys(slotContent).forEach(token=>{
+      slotContent[token]=slotContent[token].replace(re, iss.original_text);
+    });
+    if(freeEdit) editorText=editorText.replace(re, iss.original_text);
+  }
+  resolveIssue(iss, 'Reverted');
+  renderSkeleton(dictating);
+  notify('Correction reverted');
+}
 
 function addToVocab(id){
   const issue=issues.find(i=>i.id===id);
   if(!issue||!issue.original_text) return;
   const word=issue.original_text.toLowerCase();
   vocabulary.add(word);
-  // Remove the issue (original text stays as-is in the report)
-  issues=issues.filter(i=>i.id!==id);
-  document.getElementById('card-'+id)?.remove();
-  bump(issues.length,false);
+  if(issue.suggested_text){
+    const re=new RegExp(issue.suggested_text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');
+    Object.keys(slotContent).forEach(token=>{
+      slotContent[token]=slotContent[token].replace(re, issue.original_text);
+    });
+    if(freeEdit) editorText=editorText.replace(re, issue.original_text);
+  }
+  resolveIssue(issue, 'Added to vocabulary');
   renderSkeleton(dictating);
   renderVocabTray();
-  if(!issues.length) emptyState('All issues resolved','ti-circle-check','var(--green)');
   notify(`"${issue.original_text}" added to vocabulary — won't flag again`);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESOLVED ISSUES — move addressed issues here so they can be undone
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Move an issue from active to resolved, storing a snapshot for undo */
+function resolveIssue(issue, actionLabel){
+  // Snapshot current text state so undo can restore it
+  const snapshot = {
+    slotContent: JSON.parse(JSON.stringify(slotContent)),
+    editorText: editorText,
+  };
+  resolvedIssues.push({ issue, actionLabel, snapshot });
+  // Remove from active
+  issues = issues.filter(i => i.id !== issue.id);
+  document.getElementById('card-' + issue.id)?.remove();
+  bump(issues.length, false);
+  renderResolved();
+  if(!issues.length && resolvedIssues.length) {
+    document.getElementById('qaList').innerHTML=
+      `<div class="qa-empty" id="qaEmpty"><i class="ti ti-circle-check" style="color:var(--green)" aria-hidden="true"></i><span style="color:var(--green)">All issues addressed</span></div>`;
+  }
+}
+
+function renderResolved(){
+  const section = document.getElementById('resolvedSection');
+  const body = document.getElementById('resolvedBody');
+  const count = document.getElementById('resolvedCount');
+  if(resolvedIssues.length === 0){
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  count.textContent = resolvedIssues.length;
+
+  body.innerHTML = resolvedIssues.map(entry => {
+    const issue = entry.issue;
+    const bc = issue.category==='Discrepancy'?'ibd':issue.category==='Reimbursement'?'ibb':'ibm';
+    const isDualDisc = issue.category==='Discrepancy' && issue.findings_text && issue.impression_text;
+
+    let bodyHtml = '';
+    if(isDualDisc){
+      bodyHtml = `<div class="ibody" style="font-size:11px;color:var(--text3)">${esc(issue.findings_text)} / ${esc(issue.impression_text)}</div>`;
+    } else if(issue.original_text && issue.suggested_text){
+      bodyHtml = `<div class="ibody"><span class="iold">${esc(issue.original_text)}</span> <span class="inew">→ ${esc(issue.suggested_text)}</span></div>`;
+    } else if(issue.original_text){
+      bodyHtml = `<div class="ibody" style="color:var(--text3)">${esc(issue.original_text)}</div>`;
+    }
+
+    return `<div class="resolved-card">
+      <div class="ihead">
+        <span class="imeta">${esc(issue.label)}</span>
+        <span class="ibdg ${bc}">${esc(issue.category)}</span>
+      </div>
+      <div class="resolved-action-label"><i class="ti ti-circle-check" aria-hidden="true"></i>${esc(entry.actionLabel)}</div>
+      ${bodyHtml}
+      <button class="btn-undo" onclick="undoResolve('${issue.id}')"><i class="ti ti-arrow-back-up" style="font-size:10px"></i> Undo</button>
+    </div>`;
+  }).join('');
+}
+
+function toggleResolved(){
+  const body = document.getElementById('resolvedBody');
+  const chev = document.getElementById('resolvedChevron');
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? 'block' : 'none';
+  chev.className = hidden ? 'ti ti-chevron-down' : 'ti ti-chevron-right';
+  chev.style.fontSize = '11px';
+  chev.style.color = 'var(--text3)';
+}
+
+function undoResolve(id){
+  const idx = resolvedIssues.findIndex(r => r.issue.id === id);
+  if(idx === -1) return;
+  const entry = resolvedIssues[idx];
+  resolvedIssues.splice(idx, 1);
+
+  // Restore text state from snapshot
+  Object.assign(slotContent, entry.snapshot.slotContent);
+  editorText = entry.snapshot.editorText;
+
+  // Move issue back to active
+  issues.push(entry.issue);
+  bump(issues.length, true);
+
+  // Remove empty state if present
+  document.getElementById('qaEmpty')?.remove();
+
+  // Add card back at top of list
+  if(matches(entry.issue)){
+    document.getElementById('qaList').insertAdjacentHTML('afterbegin', mkCard(entry.issue, true));
+  }
+
+  renderResolved();
+  renderSkeleton(dictating);
+  notify('Change undone');
 }
 
 function removeFromVocab(word){
@@ -1364,13 +1510,27 @@ document.addEventListener('DOMContentLoaded',()=>{
       // Standard single-span issue
       const origLower = issue.original_text.toLowerCase();
       const hasOrig = rawText.toLowerCase().includes(origLower);
-      if(!hasOrig) return true;
+
+      if(issue.issue_type === 'Autocorrect'){
+        // Autocorrect: the report shows the suggested_text in green.
+        // Resolve if neither original NOR suggested text is present (user typed over it).
+        const hasSugg = issue.suggested_text &&
+          rawText.toLowerCase().includes(issue.suggested_text.toLowerCase());
+        if(!hasOrig && !hasSugg) return true;
+      } else {
+        if(!hasOrig) return true;
+      }
 
       // Span integrity check
       const span = ed2.querySelector(`[data-id="${issue.id}"]`);
       if(!span) return true;
-      const spanText = span.textContent.replace(/→.*$/,'').trim();
-      if(spanText.toLowerCase() !== issue.original_text.toLowerCase()) return true;
+      const autoNewEl = span.querySelector('.hl-auto-new');
+      if(autoNewEl){
+        if(autoNewEl.textContent.toLowerCase() !== (issue.suggested_text||'').toLowerCase()) return true;
+      } else {
+        const spanText = span.textContent.replace(/→.*$/,'').trim();
+        if(spanText.toLowerCase() !== issue.original_text.toLowerCase()) return true;
+      }
 
       return false;
     });
@@ -1380,11 +1540,8 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(toResolve.length > 0){
       removePopover();
       toResolve.forEach(issue => {
-        issues = issues.filter(i => i.id !== issue.id);
-        document.getElementById('card-' + issue.id)?.remove();
+        resolveIssue(issue, 'Edited by user');
       });
-      bump(issues.length, false);
-      if(!issues.length) emptyState('All issues resolved','ti-circle-check','var(--green)');
     }
 
     // Always rebuild to re-apply (or clear) highlights
@@ -1405,7 +1562,12 @@ function getRawText(el){
   clone.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
   // Ghost suggestion pills contribute no real text
   clone.querySelectorAll('.hl-sugg').forEach(s => s.remove());
-  // Unwrap all highlight spans — keep their text content
+  // Autocorrect spans: collapse to just the corrected (green) word
+  clone.querySelectorAll('.hl-auto').forEach(span => {
+    const newPart = span.querySelector('.hl-auto-new');
+    span.replaceWith(document.createTextNode(newPart ? newPart.textContent : span.textContent));
+  });
+  // Unwrap all other highlight spans — keep their text content
   clone.querySelectorAll('.hl-disc,.hl-gram,.hl-bill').forEach(span => {
     span.replaceWith(document.createTextNode(span.textContent));
   });
@@ -1417,18 +1579,24 @@ function getRawText(el){
 function extractPlainText(el){
   const clone=el.cloneNode(true);
   clone.querySelectorAll('br').forEach(br=>br.replaceWith('\n'));
+  clone.querySelectorAll('.hl-sugg').forEach(s=>s.remove());
+  clone.querySelectorAll('.hl-auto').forEach(span=>{
+    const newSpan=span.querySelector('.hl-auto-new');
+    span.replaceWith(document.createTextNode(newSpan ? newSpan.textContent : span.textContent));
+  });
   clone.querySelectorAll('.hl-disc,.hl-gram,.hl-bill').forEach(span=>{
     span.replaceWith(document.createTextNode(span.textContent));
   });
-  clone.querySelectorAll('.hl-sugg').forEach(s=>s.remove());
   clone.querySelectorAll('.skel').forEach(s=>s.remove());
   return clone.textContent;
 }
 function resetQa(){
-  issues=[]; triggered.clear();
+  issues=[]; triggered.clear(); resolvedIssues=[];
   pendingTOs.forEach(clearTimeout); pendingTOs=[]; processingN=0;
   document.getElementById('analyzing').classList.remove('on');
   bump(0,false);
+  document.getElementById('resolvedSection').style.display='none';
+  document.getElementById('resolvedBody').innerHTML='';
   emptyState('Issues appear as you dictate','ti-shield-check','var(--text3)');
 }
 
